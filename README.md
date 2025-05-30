@@ -8,9 +8,8 @@ A tool for **batch-translating `.po` localization files** using the Deepseek AI 
 ## ⭐ Features
 
 - **Batch translates .po files** from Russian (or other source languages) to your chosen language using Deepseek AI.
-- **Multithreaded:** Translates many strings in parallel for speed.
 - **Smart detection:** Skips English, empty, numeric, and coordinate entries.
-- **Customizable:** Configure batch size, workers, target language, retry count, and more.
+- **Customizable:** Configure batch size, workers, target language, and more.
 - **Cache-aware:** Warns and optimizes for Deepseek's discounted hours.
 - **API key management:** Will auto-create and open `deepseek_key.txt` if missing.
 
