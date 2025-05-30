@@ -1,3 +1,4 @@
+
 # Deepseek PO Translator
 
 A high-performance, user-friendly tool for **batch-translating `.po` localization files** using the Deepseek AI API.
@@ -7,11 +8,12 @@ Supports bulk translation with batching, multi-threading, customizable settings,
 
 ## ⭐ Features
 
-- **Batch translates .po files** from Russian (for now) to your chosen language using Deepseek AI.
+- **Batch translates .po files** from Russian (or other source languages) to your chosen language using Deepseek AI.
 - **Multithreaded:** Translates many strings in parallel for speed.
 - **Smart detection:** Skips English, empty, numeric, and coordinate entries.
 - **Customizable:** Configure batch size, workers, target language, retry count, and more.
 - **Cache-aware:** Warns and optimizes for Deepseek's discounted hours.
+- **User-friendly:** Interactive prompts, clear error messages, and helpful onboarding for missing API keys.
 - **API key management:** Will auto-create and open `deepseek_key.txt` if missing.
 
 ---
@@ -72,6 +74,12 @@ Check out: [GtafanWRLD/PO_AI_Translate](https://github.com/GtafanWRLD/PO_AI_Tran
 
 ---
 
+## 🖼️ Logo
+
+<img src="translate.ico" width="80" alt="Deepseek Translator Logo">
+
+---
+
 ## ✍️ Author
 
 Made by [GtafanWRLD](https://github.com/GtafanWRLD)  
@@ -81,6 +89,6 @@ If you find it useful, feel free to star or contribute!
 
 ## 📝 License
 
-MIT
+MIT (see `LICENSE` file)
 
 ---
