@@ -28,16 +28,7 @@ A tool for **batch-translating `.po` localization files** using the Deepseek AI 
 
 3. **Place your `.po` files in the `input/` folder.**
 
-4. **Run the script:**
-   ```bash
-   python po_translate_deepseek.py
-   ```
-   - Or compile to executable (with a custom icon!):
-     ```bash
-     python -m PyInstaller --onefile --icon=translate.ico po_translate_deepseek.py
-     ```
-
-5. **Translated files will appear in the `output/` folder.**
+4. **Translated files will appear in the `output/` folder.**
 
 ---
 
