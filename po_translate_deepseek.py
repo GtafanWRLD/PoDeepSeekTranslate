@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-PO Translator v12.0 – Enhanced Deepseek AI Integration
-Translates .po files with improved language detection and performance
-"""
-
 import os
 import json
 import requests
@@ -15,71 +9,20 @@ from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
 import langdetect
 from langdetect import detect
-import requests 
 from datetime import datetime
 import subprocess
-
-def get_current_utc_time():
-    """
-    Returns a datetime object for current UTC time, tries two APIs.
-    """
-    try:
-        r = requests.get("http://worldtimeapi.org/api/timezone/Etc/UTC", timeout=10)
-        if r.ok:
-            utc_dt = r.json()['utc_datetime']
-            dt = datetime.fromisoformat(utc_dt.replace('Z', '+00:00'))
-            return dt
-    except Exception:
-        pass
-    try:
-        r = requests.get("https://timeapi.io/api/Time/current/zone?timeZone=UTC", timeout=10)
-        if r.ok:
-            dtstr = r.json()['dateTime']
-            dt = datetime.fromisoformat(dtstr.split(".")[0])
-            return dt
-    except Exception:
-        pass
-    return None
-
-def enforce_deepseek_discount_hours():
-    """
-    Checks if current UTC time is within 16:00–23:59 UTC.
-    If not, warns user and asks if they want to continue anyway.
-    """
-    now = get_current_utc_time()
-    if now is None:
-        print("⚠️  Could not verify current UTC time. Exiting to avoid being charged full price.")
-        exit(1)
-    hour = now.hour
-    minute = now.minute
-    if 16 <= hour <= 23:
-        print(f"✅ Within Deepseek discounted hours (16:00–23:59 UTC). Continuing...")
-        return
-    print("⏳ Deepseek translation is only allowed between 16:00 and 23:59 UTC for discounted pricing.")
-    print(f"   Current UTC time: {hour:02d}:{minute:02d}.")
-    response = input("⚠️  You are outside the discounted hours. Do you want to continue anyway? (y/N): ").strip().lower()
-    if response != 'y':
-        print("Aborting to avoid possible full-price charges.")
-        exit(1)
-    print("⚠️  Proceeding outside discounted hours (you may be charged standard price).")
-
-
 
 CONFIG_FILE = "config.json"
 KEY_FILE = "deepseek_key.txt"
 
-
-
-
-# Optimized default config for faster translations
 DEFAULT_CONFIG = {
-    "batch_size": 50,      # Increased from 20
-    "max_workers": 12,     # Increased from 6
-    "api_delay": 0.05,     # Reduced from 0.1
+    "batch_size": 60,
+    "max_workers": 12,
+    "api_delay": 0.05,
     "max_retries": 3,
     "min_text_length": 2,
-    "max_tokens": 6000,    # Increased from 4000
-    "temperature": 0.05    # Reduced for more consistent translations
+    "max_tokens": 6000,
+    "temperature": 0.05
 }
 
 LANGUAGE_CODES = {
@@ -87,30 +30,14 @@ LANGUAGE_CODES = {
     "ES": "Spanish", 
     "FR": "French",
     "DE": "German",
-    "IT": "Italian",
-    "PT": "Portuguese",
     "PL": "Polish",
-    "NL": "Dutch",
     "RU": "Russian",
-    "UK": "Ukrainian",
-    "CS": "Czech",
-    "SK": "Slovak"
+    "UK": "Ukrainian"
 }
 
-# Language detection mapping (langdetect codes to our codes)
 LANGDETECT_TO_CODE = {
-    'en': 'EN',
-    'es': 'ES', 
-    'fr': 'FR',
-    'de': 'DE',
-    'it': 'IT',
-    'pt': 'PT',
-    'pl': 'PL',
-    'nl': 'NL',
-    'ru': 'RU',
-    'uk': 'UK',
-    'cs': 'CS',
-    'sk': 'SK'
+    'en': 'EN', 'es': 'ES', 'fr': 'FR', 'de': 'DE',
+    'pl': 'PL', 'ru': 'RU', 'uk': 'UK'
 }
 
 COORD_MAP = {
@@ -123,8 +50,6 @@ progress_lock = threading.Lock()
 api_semaphore = None
 
 class DeepseekClient:
-    """Enhanced Deepseek AI API Client for translation"""
-    
     def __init__(self, api_key):
         self.api_key = api_key
         self.base_url = "https://api.deepseek.com/v1"
@@ -134,46 +59,33 @@ class DeepseekClient:
         }
     
     def translate(self, texts, source_language="auto", target_language="EN"):
-        """
-        Enhanced translation method with better batch processing
-        """
         if not texts:
             return []
         
         target_lang_name = LANGUAGE_CODES.get(target_language, target_language)
         
-        # Create optimized batch format
-        batch_items = []
-        for i, text in enumerate(texts):
-            batch_items.append(f"[{i+1}] {text}")
-        
+        # Create batch format
+        batch_items = [f"[{i+1}] {text}" for i, text in enumerate(texts)]
         batch_text = "\n\n".join(batch_items)
         
-        # Enhanced system prompt for better performance
         system_prompt = (
             f"Translate to {target_lang_name}. CRITICAL RULES:\n"
             "1. PRESERVE ALL variables: %(var)s, %d, {0}, {{key}}, etc.\n"
-            "2. PRESERVE ALL formatting: \\n, \\t, spacing, line breaks\n"
+            "2. PRESERVE ALL formatting: \\n, \\t, spacing\n"
             "3. PRESERVE ALL special chars and symbols\n"
-            f"4. Output natural {target_lang_name} for gaming/software content\n"
+            f"4. Output natural {target_lang_name} for gaming/software\n"
             "5. Keep [N] numbering format\n"
-            "6. Military terms: танк=tank, броня=armor, урон=damage\n"
-            "7. NO extra text or explanations\n"
-            "8. If text has \\n keep as literal \\n characters\n\n"
+            "6. NO extra text, explanations, or random characters\n"
+            "7. Do NOT add backslashes randomly\n"
+            "8. Military/gaming terms: танк=tank, броня=armor, урон=damage\n\n"
             "Output format: [N] translated_text"
         )
 
         payload = {
             "model": "deepseek-chat",
             "messages": [
-                {
-                    "role": "system",
-                    "content": system_prompt
-                },
-                {
-                    "role": "user", 
-                    "content": batch_text
-                }
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": batch_text}
             ],
             "temperature": config.get('temperature', 0.05),
             "max_tokens": config.get('max_tokens', 6000),
@@ -193,16 +105,10 @@ class DeepseekClient:
         result = response.json()
         content = result['choices'][0]['message']['content'].strip()
         
-        # Enhanced parsing with multiple fallback methods
-        translations = self._parse_translations(content, texts)
-        
-        return translations
+        return self._parse_translations(content, texts)
     
     def _parse_translations(self, content, original_texts):
-        """Enhanced translation parsing with multiple fallback methods"""
         translations = []
-        
-        # Method 1: Parse [N] format
         lines = content.split('\n')
         parsed = {}
         
@@ -211,7 +117,6 @@ class DeepseekClient:
             if not line:
                 continue
                 
-            # Look for [N] pattern
             match = re.match(r'\[(\d+)\]\s*(.*)', line)
             if match:
                 idx = int(match.group(1)) - 1
@@ -219,42 +124,38 @@ class DeepseekClient:
                 if 0 <= idx < len(original_texts):
                     parsed[idx] = translation
         
-        # Method 2: Fallback - split by double newlines and match by position
+        # Fallback parsing
         if len(parsed) < len(original_texts):
             sections = re.split(r'\n\s*\n', content)
             for i, section in enumerate(sections):
                 if i < len(original_texts) and i not in parsed:
-                    # Clean up the section
                     cleaned = re.sub(r'^\[\d+\]\s*', '', section.strip())
                     if cleaned:
                         parsed[i] = cleaned
         
-        # Build final translations list
+        # Build final list with contamination check
         for i in range(len(original_texts)):
             if i in parsed and parsed[i].strip():
-                translations.append(parsed[i].strip())
+                translation = parsed[i].strip()
+                # Remove random backslashes that shouldn't be there
+                if '\\' in translation and '\\' not in original_texts[i]:
+                    # Only keep backslashes that were in original
+                    translation = translation.replace('\\', '')
+                translations.append(translation)
             else:
-                # Fallback to original
                 translations.append(original_texts[i])
         
         return translations
 
 def ensure_and_load_deepseek_key():
-    """
-    Ensures deepseek_key.txt exists and contains a key. Opens it in notepad if needed.
-    Waits for user to paste/save, then presses Enter to continue.
-    Returns the API key string.
-    """
     keyfile = "deepseek_key.txt"
     while True:
         if not os.path.exists(keyfile) or not open(keyfile, encoding="utf-8").read().strip():
-            # Create empty file if missing
             if not os.path.exists(keyfile):
                 with open(keyfile, "w", encoding="utf-8") as f:
                     f.write("")
-            print(f"\n🔑 Please paste your Deepseek API key into the file: {os.path.abspath(keyfile)}")
+            print(f"\n🔑 Please paste your Deepseek API key into: {os.path.abspath(keyfile)}")
             print("Opening it in your default text editor...")
-            # Cross-platform open
             try:
                 if sys.platform.startswith('win'):
                     os.startfile(keyfile)
@@ -263,27 +164,24 @@ def ensure_and_load_deepseek_key():
                 else:
                     subprocess.Popen(['xdg-open', keyfile])
             except Exception as e:
-                print(f"⚠️  Could not open editor automatically: {e}")
-            input("After pasting & saving your key, press Enter to continue...")
-        # Try to read the key
+                print(f"⚠️  Could not open editor: {e}")
+            input("After pasting & saving your key, press Enter...")
+        
         try:
             key = open(keyfile, encoding="utf-8").read().strip()
             if key:
                 return key
             else:
-                print("⚠️  No key detected in the file. Please paste and save your key, then press Enter.")
+                print("⚠️  No key detected. Please paste and save your key.")
         except Exception as e:
             print(f"❌ Error reading {keyfile}: {e}")
             sys.exit(1)
-
-
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                 loaded = json.load(f)
-                # Merge with defaults to ensure all keys exist
                 config = DEFAULT_CONFIG.copy()
                 config.update(loaded)
                 return config
@@ -292,7 +190,6 @@ def load_config():
     return None
 
 def save_config(config):
-    """Save configuration to JSON file"""
     try:
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=4, ensure_ascii=False)
@@ -300,22 +197,18 @@ def save_config(config):
         print(f"❌ Could not save settings: {e}")
 
 def interactive_setup():
-    print("🚀 PO Translator - First-Time Setup")
+    print("🚀 PO Translator - Setup")
     config = DEFAULT_CONFIG.copy()
     
-    print(f"\nOptimized defaults for faster translation:")
-    print(f"  Batch size: {config['batch_size']} (more texts per API call)")
-    print(f"  Max workers: {config['max_workers']} (more parallel requests)")
-    print(f"  API delay: {config['api_delay']}s (faster rate)")
-    print(f"  Max tokens: {config['max_tokens']} (larger responses)")
+    print(f"\nOptimized defaults:")
+    for key, value in config.items():
+        print(f"  {key}: {value}")
     
-    if input("\nUse optimized defaults? (Y/n): ").lower().startswith('n'):
+    if input("\nUse defaults? (Y/n): ").lower().startswith('n'):
         try:
-            config['batch_size'] = int(input(f"Batch size [{config['batch_size']}]: ") or config['batch_size'])
-            config['max_workers'] = int(input(f"Max workers [{config['max_workers']}]: ") or config['max_workers'])
-            config['api_delay'] = float(input(f"API delay (s) [{config['api_delay']}]: ") or config['api_delay'])
-            config['max_retries'] = int(input(f"Max retries [{config['max_retries']}]: ") or config['max_retries'])
-            config['min_text_length'] = int(input(f"Min text length [{config['min_text_length']}]: ") or config['min_text_length'])
+            for key in ['batch_size', 'max_workers', 'max_retries']:
+                config[key] = int(input(f"{key} [{config[key]}]: ") or config[key])
+            config['api_delay'] = float(input(f"api_delay [{config['api_delay']}]: ") or config['api_delay'])
         except ValueError:
             print("❌ Invalid input; using defaults.")
     
@@ -335,53 +228,33 @@ def read_po_file(path):
         return text, 'utf-8'
 
 def detect_language_enhanced(text):
-    """
-    Enhanced language detection with better accuracy
-    Returns language code (EN, RU, PL, etc.) or 'unknown'
-    """
     if not text or len(text.strip()) < 3:
         return 'unknown'
     
     try:
-        # Clean text for detection - remove variables and formatting but keep more text
         clean_text = re.sub(r'%\([^)]+\)s|%\w+|{\w+}|\\[ntr]', ' ', text)
-        clean_text = re.sub(r'[^\w\s]', ' ', clean_text)  # Remove special chars but keep letters
+        clean_text = re.sub(r'[^\w\s]', ' ', clean_text)
         clean_text = re.sub(r'\s+', ' ', clean_text).strip()
         
         if len(clean_text) < 3:
             return 'unknown'
         
-        # Use langdetect with confidence check
         detected = detect(clean_text)
-        
-        # Convert langdetect code to our format
         our_code = LANGDETECT_TO_CODE.get(detected, 'unknown')
         
-        # Additional checks for common cases
         if our_code == 'unknown':
-            # Check for Cyrillic (Russian/Ukrainian)
             if re.search(r'[\u0400-\u04FF]', text):
-                # More specific detection between RU and UK
-                if re.search(r'[іїєґ]', text):  # Ukrainian specific chars
-                    return 'UK'
-                else:
-                    return 'RU'
-            # Check for Polish specific characters
+                return 'UK' if re.search(r'[іїєґ]', text) else 'RU'
             elif re.search(r'[ąćęłńóśźż]', text, re.IGNORECASE):
                 return 'PL'
-            # Check for basic Latin
             elif re.search(r'[a-zA-Z]', text):
-                return 'EN'  # Default to English for Latin script
+                return 'EN'
         
         return our_code
         
-    except Exception as e:
-        # Fallback to regex-based detection
+    except Exception:
         if re.search(r'[\u0400-\u04FF]', text):
-            if re.search(r'[іїєґ]', text):
-                return 'UK'
-            else:
-                return 'RU'
+            return 'UK' if re.search(r'[іїєґ]', text) else 'RU'
         elif re.search(r'[ąćęłńóśźż]', text, re.IGNORECASE):
             return 'PL'
         elif re.search(r'[a-zA-Z]', text):
@@ -389,229 +262,218 @@ def detect_language_enhanced(text):
         return 'unknown'
 
 def should_translate_content(content, target_language):
-    """
-    Enhanced logic to determine if content should be translated
-    Returns (should_translate: bool, reason: str, detected_lang: str)
-    """
     if not content or not content.strip():
         return False, 'empty', 'unknown'
     
-    # Check minimum length
     if len(content.strip()) < config.get('min_text_length', 2):
         return False, 'too_short', 'unknown'
     
-    # Detect language
     detected_lang = detect_language_enhanced(content)
     
-    # Check if it's coordinate format
     if is_coordinate_format(content):
         return False, 'coordinate', detected_lang
     
-    # Check for patterns that shouldn't be translated
     skip_patterns = [
-        r'^[A-Z]\d+$',  # Coordinate patterns
-        r'^\d+$',       # Pure numbers
-        r'^[.,:;!?]+$', # Pure punctuation
-        r'^[A-Za-z0-9_]+\.(png|jpg|jpeg|gif|svg|wav|mp3|ogg)$',  # File names
-        r'^#[0-9A-Fa-f]{6}$',  # Hex colors
-        r'^\w+://',     # URLs
-        r'^[A-Za-z0-9_]+$',  # Single words that might be identifiers
+        r'^[A-Z]\d+$', r'^\d+$', r'^[.,:;!?]+$',
+        r'^[A-Za-z0-9_]+\.(png|jpg|jpeg|gif|svg|wav|mp3|ogg)$',
+        r'^#[0-9A-Fa-f]{6}$', r'^\w+://', r'^[A-Za-z0-9_]+$'
     ]
     
     for pattern in skip_patterns:
         if re.match(pattern, content.strip()):
             return False, 'skip_pattern', detected_lang
     
-    # Main logic: translate if detected language is different from target
     if detected_lang == 'unknown':
-        # If we can't detect, assume it needs translation (conservative approach)
         return True, 'unknown_assume_translate', detected_lang
     elif detected_lang == target_language:
-        # Same language as target - don't translate
         return False, 'same_as_target', detected_lang
     else:
-        # Different language - translate it
         return True, 'different_language', detected_lang
 
 def is_coordinate_format(text):
-    """Check if text is a coordinate format like A1, B2, etc."""
     if not text or len(text.strip()) > 10:
         return False
     
     text = text.strip()
-    
-    # Check for simple coordinate patterns
-    if re.match(r'^[A-Z]\d+$', text):
-        return True
-    
-    # Check for Cyrillic coordinates
-    if re.match(r'^[А-Я]\d+$', text):
-        return True
-    
-    return False
+    return bool(re.match(r'^[A-ZА-Я]\d+$', text))
 
 def translate_coordinate(coord_text):
-    """Transliterate Cyrillic coordinates to Latin"""
     if not coord_text:
         return coord_text
     
     result = ""
     for char in coord_text:
-        if char in COORD_MAP:
-            result += COORD_MAP[char]
-        else:
-            result += char
-    
+        result += COORD_MAP.get(char, char)
     return result
 
 def escape_po(text):
-    """Properly escape text for PO format - FIXED newline handling"""
     if not text:
         return ""
-    
-    # Handle escaping properly - don't double-escape
-    escaped = text.replace('\\', '\\\\').replace('"', '\\"')
-    
-    # IMPORTANT: Don't modify \n sequences that are already literal
-    # The issue was here - we were adding extra \n
-    return escaped
-
-def format_po_string(text, indent=""):
-    """Format text for PO file with FIXED multiline handling"""
-    if not text:
-        return f'{indent}msgstr ""'
-    
-    # Check if text contains actual newlines (not \n literals)
-    has_real_newlines = '\n' in text and not text.replace('\\n', '').find('\n') == -1
-    
-    if has_real_newlines:
-        # Handle actual multiline content
-        lines = text.split('\n')
-        result = [f'{indent}msgstr ""']
-        for i, line in enumerate(lines):
-            escaped_line = escape_po(line)
-            if i == len(lines) - 1:
-                # Last line - don't add \n unless original had it
-                result.append(f'{indent}"{escaped_line}"')
-            else:
-                result.append(f'{indent}"{escaped_line}\\n"')
-        return '\n'.join(result)
-    else:
-        # Single line or text with \n literals - keep as is
-        escaped = escape_po(text)
-        return f'{indent}msgstr "{escaped}"'
+    return text.replace('\\', '\\\\').replace('"', '\\"')
 
 def find_msgstr_blocks(lines, target_language):
-    """Enhanced msgstr block detection with language analysis"""
+    """Enhanced to handle both regular msgstr and plural forms msgstr[n]"""
     blocks = []
     i = 0
     idx = 0
-    stats = {
-        'empty': 0, 'too_short': 0, 'same_as_target': 0, 
-        'coordinate': 0, 'skip_pattern': 0, 'different_language': 0,
-        'unknown_assume_translate': 0
-    }
+    stats = {'empty': 0, 'too_short': 0, 'same_as_target': 0, 
+             'coordinate': 0, 'skip_pattern': 0, 'different_language': 0,
+             'unknown_assume_translate': 0}
     lang_stats = {}
     
     while i < len(lines):
-        if lines[i].lstrip().startswith('msgstr'):
-            start = i
-            original = []
-            line = lines[i].lstrip()
-            
-            # Store the original indentation
-            indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
-            
-            if line.strip() == 'msgstr ""':
-                # Multiline msgstr
-                i += 1
-                while i < len(lines) and lines[i].strip().startswith('"') and lines[i].strip().endswith('"'):
-                    content = lines[i].strip()[1:-1]  # Remove quotes
-                    original.append(content)
-                    i += 1
+        # Handle regular msgstr
+        if lines[i].lstrip().startswith('msgstr '):
+            block = parse_regular_msgstr(lines, i, idx, target_language, stats, lang_stats)
+            if block:
+                blocks.append(block)
+                i = block['end'] + 1
+                idx += 1
             else:
-                # Single line msgstr
-                content = line.partition(' ')[2].strip()
-                if content.startswith('"') and content.endswith('"'):
-                    content = content[1:-1]  # Remove quotes
-                original.append(content)
                 i += 1
-            
-            # Join content and unescape for analysis
-            content = ''.join(original)
-            # Unescape for language detection
-            analysis_content = content.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
-            
-            # Enhanced content analysis
-            should_translate, reason, detected_lang = should_translate_content(analysis_content, target_language)
-            
-            # Update statistics
-            stats[reason] = stats.get(reason, 0) + 1
-            if detected_lang != 'unknown':
-                lang_stats[detected_lang] = lang_stats.get(detected_lang, 0) + 1
-            
-            blocks.append({
-                'start': start, 
-                'end': i-1, 
-                'idx': idx, 
-                'content': content,  # Keep original escaped format
-                'reason': reason,
-                'should_translate': should_translate,
-                'detected_lang': detected_lang,
-                'indent': indent,
-                'is_multiline': line.strip() == 'msgstr ""'
-            })
-            
-            idx += 1
+        
+        # Handle plural forms msgstr[n]
+        elif lines[i].lstrip().startswith('msgstr['):
+            block = parse_plural_msgstr(lines, i, idx, target_language, stats, lang_stats)
+            if block:
+                blocks.append(block)
+                i = block['end'] + 1
+                idx += 1
+            else:
+                i += 1
         else:
             i += 1
     
-    # Print enhanced statistics
+    print_stats(blocks, target_language, stats, lang_stats)
+    return blocks
+
+def parse_regular_msgstr(lines, start_i, idx, target_language, stats, lang_stats):
+    """Parse regular msgstr block"""
+    i = start_i
+    original = []
+    line = lines[i].lstrip()
+    indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+    
+    if line.strip() == 'msgstr ""':
+        # Multiline msgstr
+        i += 1
+        while i < len(lines) and lines[i].strip().startswith('"') and lines[i].strip().endswith('"'):
+            content = lines[i].strip()[1:-1]
+            original.append(content)
+            i += 1
+    else:
+        # Single line msgstr
+        content = line.partition(' ')[2].strip()
+        if content.startswith('"') and content.endswith('"'):
+            content = content[1:-1]
+        original.append(content)
+        i += 1
+    
+    content = ''.join(original)
+    analysis_content = content.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
+    
+    should_translate, reason, detected_lang = should_translate_content(analysis_content, target_language)
+    
+    stats[reason] = stats.get(reason, 0) + 1
+    if detected_lang != 'unknown':
+        lang_stats[detected_lang] = lang_stats.get(detected_lang, 0) + 1
+    
+    return {
+        'start': start_i, 'end': i-1, 'idx': idx, 'content': content,
+        'reason': reason, 'should_translate': should_translate,
+        'detected_lang': detected_lang, 'indent': indent,
+        'is_multiline': line.strip() == 'msgstr ""',
+        'type': 'regular'
+    }
+
+def parse_plural_msgstr(lines, start_i, idx, target_language, stats, lang_stats):
+    """Parse plural msgstr[n] blocks"""
+    i = start_i
+    plural_forms = {}
+    base_indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+    
+    # Collect all msgstr[n] forms
+    while i < len(lines) and lines[i].lstrip().startswith('msgstr['):
+        line = lines[i].lstrip()
+        match = re.match(r'msgstr\[(\d+)\]\s*"(.*)"', line)
+        if match:
+            form_num = int(match.group(1))
+            content = match.group(2)
+            plural_forms[form_num] = content
+        i += 1
+    
+    if not plural_forms:
+        return None
+    
+    # Analyze first form for language detection
+    first_content = list(plural_forms.values())[0]
+    analysis_content = first_content.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
+    
+    should_translate, reason, detected_lang = should_translate_content(analysis_content, target_language)
+    
+    stats[reason] = stats.get(reason, 0) + 1
+    if detected_lang != 'unknown':
+        lang_stats[detected_lang] = lang_stats.get(detected_lang, 0) + 1
+    
+    return {
+        'start': start_i, 'end': i-1, 'idx': idx, 'content': plural_forms,
+        'reason': reason, 'should_translate': should_translate,
+        'detected_lang': detected_lang, 'indent': base_indent,
+        'is_multiline': False, 'type': 'plural'
+    }
+
+def print_stats(blocks, target_language, stats, lang_stats):
     total_blocks = len(blocks)
     translatable = sum(1 for b in blocks if b['should_translate'])
     
-    print(f"📊 Content Analysis (Target: {LANGUAGE_CODES.get(target_language, target_language)}):")
-    print(f"   Total blocks: {total_blocks}")
-    print(f"   Will translate: {translatable}")
-    print(f"   Will skip: {total_blocks - translatable}")
+    print(f"📊 Analysis (Target: {LANGUAGE_CODES.get(target_language, target_language)}):")
+    print(f"   Total: {total_blocks}, Translate: {translatable}, Skip: {total_blocks - translatable}")
     
-    print(f"\n📈 Detected languages:")
-    for lang, count in sorted(lang_stats.items(), key=lambda x: x[1], reverse=True):
-        lang_name = LANGUAGE_CODES.get(lang, lang)
-        print(f"   {lang_name}: {count}")
-    
-    print(f"\n📋 Skip reasons:")
-    for reason, count in stats.items():
-        if count > 0 and reason != 'different_language' and reason != 'unknown_assume_translate':
-            print(f"   {reason.replace('_', ' ').title()}: {count}")
-    
-    return blocks
+    if lang_stats:
+        print(f"\n📈 Languages:")
+        for lang, count in sorted(lang_stats.items(), key=lambda x: x[1], reverse=True):
+            print(f"   {LANGUAGE_CODES.get(lang, lang)}: {count}")
 
 def translate_batch(batch, batch_id, progress, target_language):
-    """Enhanced batch translation with better language handling"""
     if not batch:
         return {}
     
-    # Separate content by type
     coords = [b for b in batch if b['reason'] == 'coordinate']
     translatable = [b for b in batch if b['should_translate']]
     skippable = [b for b in batch if not b['should_translate']]
     
     results = {}
     
-    # Handle coordinates (no API call)
+    # Handle coordinates and skippable content
     for b in coords:
-        results[b['idx']] = translate_coordinate(b['content'])
+        if b['type'] == 'regular':
+            results[b['idx']] = translate_coordinate(b['content'])
+        else:  # plural
+            translated_forms = {}
+            for form_num, content in b['content'].items():
+                translated_forms[form_num] = translate_coordinate(content)
+            results[b['idx']] = translated_forms
     
-    # Skip content that doesn't need translation (no API call)
     for b in skippable:
         results[b['idx']] = b['content']
     
-    # Only make API call if there's translatable content
+    # Translate content that needs translation
     if translatable:
         with api_semaphore:
             time.sleep(config['api_delay'])
-            texts = [b['content'] for b in translatable]
+            
+            # Prepare texts for translation
+            texts = []
+            text_mapping = []  # Track which text belongs to which block
+            
+            for b in translatable:
+                if b['type'] == 'regular':
+                    texts.append(b['content'])
+                    text_mapping.append((b['idx'], 'regular', None))
+                else:  # plural
+                    for form_num, content in b['content'].items():
+                        texts.append(content)
+                        text_mapping.append((b['idx'], 'plural', form_num))
             
             for attempt in range(config['max_retries'] + 1):
                 try:
@@ -624,35 +486,45 @@ def translate_batch(batch, batch_id, progress, target_language):
                     if len(translations) != len(texts):
                         raise Exception(f"Translation count mismatch: got {len(translations)}, expected {len(texts)}")
                     
+                    # Map translations back to blocks
                     for i, translation in enumerate(translations):
+                        block_idx, block_type, form_num = text_mapping[i]
+                        
                         if translation and translation.strip():
-                            # Clean up any contamination in translation
                             cleaned = translation.strip()
                             
-                            # Check for contamination (paths that shouldn't be there)
+                            # Check for contamination
                             original = texts[i]
-                            if ('buyingPanel/' in cleaned or 'infoPanel/' in cleaned) and not ('buyingPanel/' in original or 'infoPanel/' in original):
-                                print(f"⚠️  Detected contaminated translation, using original")
-                                results[translatable[i]['idx']] = original
-                            else:
-                                results[translatable[i]['idx']] = cleaned
+                            if any(contamination in cleaned for contamination in ['buyingPanel/', 'infoPanel/']) and \
+                               not any(contamination in original for contamination in ['buyingPanel/', 'infoPanel/']):
+                                cleaned = original
+                            
+                            if block_type == 'regular':
+                                results[block_idx] = cleaned
+                            else:  # plural
+                                if block_idx not in results:
+                                    results[block_idx] = {}
+                                results[block_idx][form_num] = cleaned
                         else:
-                            results[translatable[i]['idx']] = translatable[i]['content']
+                            if block_type == 'regular':
+                                results[block_idx] = texts[i]
+                            else:  # plural
+                                if block_idx not in results:
+                                    results[block_idx] = {}
+                                results[block_idx][form_num] = texts[i]
                     
                     break
                     
                 except Exception as e:
                     if attempt < config['max_retries']:
                         wait_time = (attempt + 1) * 2
-                        print(f"⚠️  Batch {batch_id} attempt {attempt + 1} failed: {e}")
-                        print(f"   Retrying in {wait_time}s...")
+                        print(f"⚠️  Batch {batch_id} retry {attempt + 1}: {e}")
                         time.sleep(wait_time)
                     else:
-                        print(f"❌ Batch {batch_id} failed after {config['max_retries']} retries: {e}")
+                        print(f"❌ Batch {batch_id} failed: {e}")
                         for b in translatable:
                             results[b['idx']] = b['content']
     
-    # Update progress for ALL items in batch, not just translated ones
     with progress_lock:
         progress.update(len(batch))
     
@@ -668,13 +540,11 @@ def process_file(src, dst, target_language):
         print(f"No msgstr blocks found in {src}")
         return 0
     
-    # Create batches
     batches = [blocks[i:i + config['batch_size']] for i in range(0, total, config['batch_size'])]
     progress = tqdm(total=total, desc='Translating', unit='str')
     
     all_results = {}
     
-    # Process batches with threading
     with ThreadPoolExecutor(max_workers=config['max_workers']) as executor:
         futures = {executor.submit(translate_batch, batch, idx, progress, target_language): idx
                    for idx, batch in enumerate(batches)}
@@ -684,7 +554,7 @@ def process_file(src, dst, target_language):
                 batch_results = fut.result()
                 all_results.update(batch_results)
             except Exception as e:
-                print(f"❌ Batch processing error: {e}")
+                print(f"❌ Batch error: {e}")
     
     progress.close()
     
@@ -693,44 +563,44 @@ def process_file(src, dst, target_language):
     cur = 0
     
     for b in blocks:
-        # Copy lines before this msgstr block
         out.extend(lines[cur:b['start']])
         
-        # Get translation
         trans = all_results.get(b['idx'], b['content'])
-        indent = lines[b['start']].split('msgstr')[0]
+        indent = b['indent']
         
-        # Format the msgstr properly - FIXED VERSION
-        if b['is_multiline'] or '\n' in trans.replace('\\n', ''):
-            # Multiline format
-            out.append(f"{indent}msgstr \"\"")
-            
-            # Split by literal \n in the string
-            if '\\n' in trans:
-                parts = trans.split('\\n')
-                for j, part in enumerate(parts):
-                    if j == len(parts) - 1 and not part:
-                        # Last empty part from trailing \n
-                        continue
-                    if j == len(parts) - 1:
-                        # Last part without \n
-                        out.append(f"{indent}\"{escape_po(part)}\"")
-                    else:
-                        # Part with \n
-                        out.append(f"{indent}\"{escape_po(part)}\\n\"")
+        if b['type'] == 'regular':
+            # Regular msgstr
+            if b['is_multiline'] or '\n' in str(trans).replace('\\n', ''):
+                out.append(f"{indent}msgstr \"\"")
+                if '\\n' in str(trans):
+                    parts = str(trans).split('\\n')
+                    for j, part in enumerate(parts):
+                        if j == len(parts) - 1 and not part:
+                            continue
+                        if j == len(parts) - 1:
+                            out.append(f"{indent}\"{escape_po(part)}\"")
+                        else:
+                            out.append(f"{indent}\"{escape_po(part)}\\n\"")
+                else:
+                    out.append(f"{indent}\"{escape_po(str(trans))}\"")
             else:
-                # No \n sequences, treat as single line in multiline format
-                out.append(f"{indent}\"{escape_po(trans)}\"")
+                out.append(f"{indent}msgstr \"{escape_po(str(trans))}\"")
         else:
-            # Single line format
-            out.append(f"{indent}msgstr \"{escape_po(trans)}\"")
+            # Plural msgstr[n]
+            if isinstance(trans, dict):
+                for form_num in sorted(trans.keys()):
+                    content = trans[form_num]
+                    out.append(f"{indent}msgstr[{form_num}] \"{escape_po(content)}\"")
+            else:
+                # Fallback - reconstruct original
+                for form_num in sorted(b['content'].keys()):
+                    content = b['content'][form_num]
+                    out.append(f"{indent}msgstr[{form_num}] \"{escape_po(content)}\"")
         
         cur = b['end'] + 1
     
-    # Copy remaining lines
     out.extend(lines[cur:])
     
-    # Write output
     try:
         with open(dst, 'w', encoding=enc) as f:
             f.write("\n".join(out))
@@ -743,15 +613,12 @@ def process_file(src, dst, target_language):
 def main():
     global config, client, api_semaphore
     
-    # Create directories
     for d in ('input', 'output'):
         os.makedirs(d, exist_ok=True)
     
-    # Load or create config
     config = load_config() or interactive_setup()
     
-    # Language selection
-    print(f"\nAvailable target languages:")
+    print(f"\nAvailable languages:")
     for i, (code, name) in enumerate(LANGUAGE_CODES.items(), 1):
         print(f"  {i:2d}. {code} — {name}")
     
@@ -763,46 +630,21 @@ def main():
         if sel in LANGUAGE_CODES:
             target_language = sel
             break
-        print("❌ Invalid choice. Try again.")
+        print("❌ Invalid choice.")
     
-    print(f"✅ Target language: {LANGUAGE_CODES[target_language]}")
-    print(f"🧠 Smart translation: Only translates text that's NOT already in {LANGUAGE_CODES[target_language]}")
+    print(f"✅ Target: {LANGUAGE_CODES[target_language]}")
     
-    # Get API key
-    key = os.getenv('DEEPSEEK_API_KEY')
-    if not key:
-        key = ensure_and_load_deepseek_key()
-    
-    if not key and os.path.exists(KEY_FILE):
-        try:
-            with open(KEY_FILE, 'r', encoding='utf-8') as f:
-                key = f.read().strip()
-            print(f"✅ API key loaded from {KEY_FILE}")
-        except Exception as e:
-            print(f"❌ Error reading {KEY_FILE}: {e}")
-    elif key:
-        print("✅ API key loaded from environment variable")
-    
-    if not key:
-        print(f"❌ Missing Deepseek API key.")
-        print(f"   Option 1: Set environment variable: export DEEPSEEK_API_KEY='your-key'")
-        print(f"   Option 2: Create file '{KEY_FILE}' with your API key")
-        sys.exit(1)
-    
-    # Initialize client
+    key = os.getenv('DEEPSEEK_API_KEY') or ensure_and_load_deepseek_key()
     client = DeepseekClient(api_key=key)
     api_semaphore = threading.Semaphore(config['max_workers'])
     
-    # Find PO files
     po_files = [f for f in os.listdir('input') if f.endswith('.po')]
     if not po_files:
-        print("❌ No .po files found in 'input' directory.")
+        print("❌ No .po files in 'input' directory.")
         return
     
-    print(f"\n📁 Found {len(po_files)} .po file(s) to process")
-    print(f"⚡ Performance config: {config['batch_size']} batch size, {config['max_workers']} workers, {config['api_delay']}s delay")
+    print(f"\n📁 Found {len(po_files)} .po file(s)")
     
-    # Process files
     total_translated = 0
     start_time = time.time()
     
@@ -819,14 +661,13 @@ def main():
     
     elapsed = time.time() - start_time
     rate = total_translated / elapsed if elapsed > 0 else 0
-    print(f"🎉 Done! Translated {total_translated} strings in {elapsed:.1f}s ({rate:.1f} str/s)")
+    print(f"🎉 Done! {total_translated} strings in {elapsed:.1f}s ({rate:.1f} str/s)")
 
 if __name__ == '__main__':
-    enforce_deepseek_discount_hours() 
     try:
         main()
     except KeyboardInterrupt:
-        print("\n⚠️  Interrupted by user.")
+        print("\n⚠️  Interrupted.")
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+        print(f"❌ Error: {e}")
         sys.exit(1)
