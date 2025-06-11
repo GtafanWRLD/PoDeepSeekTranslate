@@ -15,34 +15,10 @@ A tool for **batch-translating `.po` localization files** using the Deepseek AI 
 
 ---
 
-## 🚀 Usage
-
-1. **Install requirements:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-   (Or see `requirements.txt` for needed packages: `deepseek`, `tqdm`, `requests`, etc.)
-
-2. **Get your Deepseek API key** from [deepseek.com](https://deepseek.com/) and paste it into `deepseek_key.txt` (the script will prompt if missing).
-
-3. **Place your `.po` files in the `input/` folder.**
-
-4. **Translated files will appear in the `output/` folder.**
-
----
-
 ## ⚙️ Configuration
 
 - Settings like `batch_size`, `max_workers`, `api_delay`, and more are stored in `config.json`.  
   First run will prompt for settings, or edit the file to adjust later.
-
----
-
-## 💸 Cost Optimization
-
-- **Runs by default only in Deepseek’s discounted hours (16:00–23:59 UTC).**
-- Warns (and allows override) if you try to run outside this window.
-- Batches requests for best cache use and minimum cost.
 
 ---
 
