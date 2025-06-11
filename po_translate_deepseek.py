@@ -137,15 +137,43 @@ class DeepseekClient:
         for i in range(len(original_texts)):
             if i in parsed and parsed[i].strip():
                 translation = parsed[i].strip()
-                # Remove random backslashes that shouldn't be there
-                if '\\' in translation and '\\' not in original_texts[i]:
-                    # Only keep backslashes that were in original
-                    translation = translation.replace('\\', '')
+                # Clean up unwanted backslashes more carefully
+                translation = self._clean_unwanted_backslashes(translation, original_texts[i])
                 translations.append(translation)
             else:
                 translations.append(original_texts[i])
         
         return translations
+    
+    def _clean_unwanted_backslashes(self, translation, original):
+        """Remove backslashes that weren't in the original text"""
+        if not translation or not original:
+            return translation
+        
+        # Check if original had backslashes at all
+        original_has_backslashes = '\\' in original
+        
+        if not original_has_backslashes and '\\' in translation:
+            # Original had no backslashes, so remove any added ones
+            # But be careful with escape sequences that might be legitimate
+            original_unescaped = self._unescape_po_content(original)
+            translation_cleaned = translation
+            
+            # Remove random backslash additions
+            if '\\"' in translation and '"' not in original_unescaped:
+                translation_cleaned = translation_cleaned.replace('\\"', '"')
+            if '\\\\' in translation and '\\' not in original_unescaped:
+                translation_cleaned = translation_cleaned.replace('\\\\', '')
+            
+            return translation_cleaned
+        
+        return translation
+    
+    def _unescape_po_content(self, content):
+        """Properly unescape PO file content for analysis"""
+        if not content:
+            return content
+        return content.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"').replace('\\\\', '\\')
 
 def ensure_and_load_deepseek_key():
     keyfile = "deepseek_key.txt"
@@ -232,15 +260,56 @@ def detect_language_enhanced(text):
         return 'unknown'
     
     try:
-        clean_text = re.sub(r'%\([^)]+\)s|%\w+|{\w+}|\\[ntr]', ' ', text)
-        clean_text = re.sub(r'[^\w\s]', ' ', clean_text)
+        # More aggressive cleaning for better language detection
+        clean_text = re.sub(r'%\([^)]+\)s|%\w+|{\w+}|\\[ntr]', ' ', text)  # Remove variables
+        clean_text = re.sub(r'[^\w\s\u0080-\uFFFF]', ' ', clean_text)  # Keep unicode chars but remove punctuation
         clean_text = re.sub(r'\s+', ' ', clean_text).strip()
         
         if len(clean_text) < 3:
             return 'unknown'
         
+        # Check for obvious English patterns first
+        english_indicators = [
+            r'\b(the|and|or|to|of|a|an|is|are|was|were|have|has|had|will|would|could|should|can|may|might|this|that|these|those|with|for|from|by|in|on|at)\b',
+            r'\b(button|click|menu|file|edit|view|help|save|open|close|cancel|ok|yes|no|options|settings)\b',
+            r'\b(error|warning|info|message|alert|confirm|dialog|window|panel|tab|page)\b'
+        ]
+        
+        english_matches = sum(1 for pattern in english_indicators if re.search(pattern, clean_text.lower()))
+        
+        # If we have multiple English indicators, it's likely English
+        if english_matches >= 2:
+            return 'EN'
+        
+        # For very short strings, be more conservative
+        if len(clean_text) < 15:
+            # Check for common English words
+            common_english = ['ok', 'yes', 'no', 'save', 'open', 'close', 'cancel', 'help', 'file', 'edit', 'view', 'menu', 'button', 'click']
+            if any(word in clean_text.lower() for word in common_english):
+                return 'EN'
+            
+            # Check for obvious non-English characters
+            if re.search(r'[\u0400-\u04FF]', text):  # Cyrillic
+                return 'UK' if re.search(r'[іїєґ]', text) else 'RU'
+            elif re.search(r'[ąćęłńóśźż]', text, re.IGNORECASE):  # Polish
+                return 'PL'
+            elif re.search(r'[àáâãäåçèéêëìíîïñòóôõöùúûüýÿ]', text, re.IGNORECASE):  # Romance languages
+                # Try langdetect for these
+                pass
+            else:
+                # Mostly ASCII, assume English for short strings
+                if re.match(r'^[a-zA-Z0-9\s.,!?-]+$', clean_text):
+                    return 'EN'
+        
+        # Use langdetect for longer strings or when unsure
         detected = detect(clean_text)
         our_code = LANGDETECT_TO_CODE.get(detected, 'unknown')
+        
+        # Verify langdetect results for common false positives
+        if our_code == 'RU' or our_code == 'PL':
+            # Double-check if this might actually be English
+            if english_matches >= 1 and not re.search(r'[\u0400-\u04FF]', text) and not re.search(r'[ąćęłńóśźż]', text, re.IGNORECASE):
+                return 'EN'
         
         if our_code == 'unknown':
             if re.search(r'[\u0400-\u04FF]', text):
@@ -253,6 +322,7 @@ def detect_language_enhanced(text):
         return our_code
         
     except Exception:
+        # Fallback detection
         if re.search(r'[\u0400-\u04FF]', text):
             return 'UK' if re.search(r'[іїєґ]', text) else 'RU'
         elif re.search(r'[ąćęłńóśźż]', text, re.IGNORECASE):
@@ -309,7 +379,22 @@ def translate_coordinate(coord_text):
 def escape_po(text):
     if not text:
         return ""
+    # Properly escape for PO format - only escape what needs escaping
     return text.replace('\\', '\\\\').replace('"', '\\"')
+
+def unescape_po(text):
+    """Properly unescape PO content"""
+    if not text:
+        return ""
+    return text.replace('\\\\', '\\').replace('\\"', '"')
+
+def parse_po_string_content(line):
+    """Extract content from a PO string line, handling escaping properly"""
+    line = line.strip()
+    if line.startswith('"') and line.endswith('"'):
+        content = line[1:-1]  # Remove outer quotes
+        return unescape_po(content)
+    return line
 
 def find_msgstr_blocks(lines, target_language):
     """Enhanced to handle both regular msgstr and plural forms msgstr[n]"""
@@ -350,7 +435,7 @@ def find_msgstr_blocks(lines, target_language):
 def parse_regular_msgstr(lines, start_i, idx, target_language, stats, lang_stats):
     """Parse regular msgstr block"""
     i = start_i
-    original = []
+    original_parts = []
     line = lines[i].lstrip()
     indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
     
@@ -358,21 +443,21 @@ def parse_regular_msgstr(lines, start_i, idx, target_language, stats, lang_stats
         # Multiline msgstr
         i += 1
         while i < len(lines) and lines[i].strip().startswith('"') and lines[i].strip().endswith('"'):
-            content = lines[i].strip()[1:-1]
-            original.append(content)
+            content = parse_po_string_content(lines[i].strip())
+            original_parts.append(content)
             i += 1
     else:
         # Single line msgstr
         content = line.partition(' ')[2].strip()
         if content.startswith('"') and content.endswith('"'):
-            content = content[1:-1]
-        original.append(content)
+            content = parse_po_string_content(content)
+        original_parts.append(content)
         i += 1
     
-    content = ''.join(original)
-    analysis_content = content.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
+    # Join parts but preserve original structure for analysis
+    content = ''.join(original_parts)
     
-    should_translate, reason, detected_lang = should_translate_content(analysis_content, target_language)
+    should_translate, reason, detected_lang = should_translate_content(content, target_language)
     
     stats[reason] = stats.get(reason, 0) + 1
     if detected_lang != 'unknown':
@@ -380,7 +465,7 @@ def parse_regular_msgstr(lines, start_i, idx, target_language, stats, lang_stats
     
     return {
         'start': start_i, 'end': i-1, 'idx': idx, 'content': content,
-        'reason': reason, 'should_translate': should_translate,
+        'original_parts': original_parts, 'reason': reason, 'should_translate': should_translate,
         'detected_lang': detected_lang, 'indent': indent,
         'is_multiline': line.strip() == 'msgstr ""',
         'type': 'regular'
@@ -398,7 +483,7 @@ def parse_plural_msgstr(lines, start_i, idx, target_language, stats, lang_stats)
         match = re.match(r'msgstr\[(\d+)\]\s*"(.*)"', line)
         if match:
             form_num = int(match.group(1))
-            content = match.group(2)
+            content = unescape_po(match.group(2))
             plural_forms[form_num] = content
         i += 1
     
@@ -407,9 +492,8 @@ def parse_plural_msgstr(lines, start_i, idx, target_language, stats, lang_stats)
     
     # Analyze first form for language detection
     first_content = list(plural_forms.values())[0]
-    analysis_content = first_content.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
     
-    should_translate, reason, detected_lang = should_translate_content(analysis_content, target_language)
+    should_translate, reason, detected_lang = should_translate_content(first_content, target_language)
     
     stats[reason] = stats.get(reason, 0) + 1
     if detected_lang != 'unknown':
@@ -530,6 +614,31 @@ def translate_batch(batch, batch_id, progress, target_language):
     
     return results
 
+def write_po_string(content, indent, is_multiline=False):
+    """Properly format a string for PO file output"""
+    if not content:
+        return f'{indent}msgstr ""'
+    
+    # Check if content contains newlines that should be preserved
+    has_newlines = '\n' in content
+    
+    if is_multiline or has_newlines:
+        lines = [f'{indent}msgstr ""']
+        if has_newlines:
+            parts = content.split('\n')
+            for i, part in enumerate(parts):
+                if i == len(parts) - 1 and not part:
+                    continue
+                if i == len(parts) - 1:
+                    lines.append(f'{indent}"{escape_po(part)}"')
+                else:
+                    lines.append(f'{indent}"{escape_po(part)}\\n"')
+        else:
+            lines.append(f'{indent}"{escape_po(content)}"')
+        return '\n'.join(lines)
+    else:
+        return f'{indent}msgstr "{escape_po(content)}"'
+
 def process_file(src, dst, target_language):
     print(f"Processing {src}...")
     lines, enc = read_po_file(src)
@@ -570,21 +679,9 @@ def process_file(src, dst, target_language):
         
         if b['type'] == 'regular':
             # Regular msgstr
-            if b['is_multiline'] or '\n' in str(trans).replace('\\n', ''):
-                out.append(f"{indent}msgstr \"\"")
-                if '\\n' in str(trans):
-                    parts = str(trans).split('\\n')
-                    for j, part in enumerate(parts):
-                        if j == len(parts) - 1 and not part:
-                            continue
-                        if j == len(parts) - 1:
-                            out.append(f"{indent}\"{escape_po(part)}\"")
-                        else:
-                            out.append(f"{indent}\"{escape_po(part)}\\n\"")
-                else:
-                    out.append(f"{indent}\"{escape_po(str(trans))}\"")
-            else:
-                out.append(f"{indent}msgstr \"{escape_po(str(trans))}\"")
+            if isinstance(trans, str):
+                po_output = write_po_string(trans, indent, b['is_multiline'])
+                out.extend(po_output.split('\n'))
         else:
             # Plural msgstr[n]
             if isinstance(trans, dict):
@@ -619,55 +716,43 @@ def main():
     config = load_config() or interactive_setup()
     
     print(f"\nAvailable languages:")
-    for i, (code, name) in enumerate(LANGUAGE_CODES.items(), 1):
-        print(f"  {i:2d}. {code} — {name}")
+    for i, (code, name) in enumerate(LANGUAGE_CODES.items()):
+        print(f"  {i+1}. {code} - {name}")
     
     while True:
-        sel = input("\nEnter language code or number: ").strip().upper()
-        if sel.isdigit() and 1 <= int(sel) <= len(LANGUAGE_CODES):
-            target_language = list(LANGUAGE_CODES.keys())[int(sel) - 1]
+        try:
+            choice = input(f"\nSelect target language (1-{len(LANGUAGE_CODES)}): ")
+            target_code = list(LANGUAGE_CODES.keys())[int(choice) - 1]
             break
-        if sel in LANGUAGE_CODES:
-            target_language = sel
-            break
-        print("❌ Invalid choice.")
+        except (ValueError, IndexError):
+            print("❌ Invalid choice")
     
-    print(f"✅ Target: {LANGUAGE_CODES[target_language]}")
-    
-    key = os.getenv('DEEPSEEK_API_KEY') or ensure_and_load_deepseek_key()
-    client = DeepseekClient(api_key=key)
+    api_key = ensure_and_load_deepseek_key()
+    client = DeepseekClient(api_key)
     api_semaphore = threading.Semaphore(config['max_workers'])
     
     po_files = [f for f in os.listdir('input') if f.endswith('.po')]
     if not po_files:
-        print("❌ No .po files in 'input' directory.")
+        print("❌ No .po files found in 'input' folder")
         return
     
-    print(f"\n📁 Found {len(po_files)} .po file(s)")
-    
+    print(f"\n🌍 Translating to {LANGUAGE_CODES[target_code]}...")
+    start = time.time() 
     total_translated = 0
-    start_time = time.time()
     
-    for fname in po_files:
-        in_path = os.path.join('input', fname)
-        out_path = os.path.join('output', fname)
-        
-        try:
-            count = process_file(in_path, out_path, target_language)
-            print(f"✅ {fname}: {count} strings translated\n")
-            total_translated += count
-        except Exception as e:
-            print(f"❌ Error processing {fname}: {e}\n")
+    for po_file in po_files:
+        src = os.path.join('input', po_file)
+        dst = os.path.join('output', po_file)
+        translated = process_file(src, dst, target_code)
+        total_translated += translated
+        print(f"✅ {po_file}: {translated} strings translated")
     
-    elapsed = time.time() - start_time
-    rate = total_translated / elapsed if elapsed > 0 else 0
-    print(f"🎉 Done! {total_translated} strings in {elapsed:.1f}s ({rate:.1f} str/s)")
+    elapsed = time.time() - start
+    print(f"\n🎉 Done! {total_translated} strings in {elapsed:.1f}s")
+    
+    if total_translated > 0:
+        rate = total_translated / elapsed
+        print(f"📈 Rate: {rate:.1f} strings/second")
 
-if __name__ == '__main__':
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n⚠️  Interrupted.")
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        sys.exit(1)
+if __name__ == "__main__":
+    main()
