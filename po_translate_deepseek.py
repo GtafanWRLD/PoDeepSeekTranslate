@@ -207,6 +207,7 @@ def ensure_and_load_deepseek_key():
             sys.exit(1)
 
 
+#checkpoint 1
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -394,6 +395,7 @@ def translate_coordinate(coord_text):
     
     return result
 
+#checkpoint 2
 
 def escape_po(text):
     """Properly escape text for PO format - FIXED to handle Russian quotes properly"""
@@ -404,6 +406,17 @@ def escape_po(text):
     escaped = escaped.replace('"', '\\"')  # Then escape ASCII double quotes only
     
     return escaped
+
+def unescape_po(text):
+    """Unescape PO format text back to original"""
+    if not text:
+        return ""
+    
+    # Reverse the escaping process
+    unescaped = text.replace('\\"', '"')  # Unescape quotes first
+    unescaped = unescaped.replace('\\\\', '\\')  # Then unescape backslashes
+    
+    return unescaped
 
 def format_po_string(text, indent=""):
     """Format text for PO file with FIXED multiline handling"""
@@ -429,6 +442,8 @@ def format_po_string(text, indent=""):
         # Single line or text with \n literals - keep as is
         escaped = escape_po(text)
         return f'{indent}msgstr "{escaped}"'
+
+#checkpoint 3
 
 def find_msgstr_blocks(lines, target_language):
     """Enhanced msgstr block detection with plural form support"""
@@ -490,6 +505,7 @@ def find_msgstr_blocks(lines, target_language):
                 'end': i-1, 
                 'idx': idx, 
                 'content': content,  # Keep original escaped format
+                'original_unescaped': analysis_content,  # Store unescaped for translation
                 'reason': reason,
                 'should_translate': should_translate,
                 'detected_lang': detected_lang,
@@ -548,6 +564,7 @@ def find_msgstr_blocks(lines, target_language):
                     'end': i-1,
                     'idx': idx,
                     'content': first_content,  # Use first form for translation
+                    'original_unescaped': analysis_content,
                     'plural_forms': plural_forms,
                     'reason': reason,
                     'should_translate': should_translate,
@@ -582,6 +599,8 @@ def find_msgstr_blocks(lines, target_language):
     
     return blocks
 
+#checkpoint 4
+
 def translate_batch(batch, batch_id, progress, target_language):
     """Enhanced batch translation with better language handling"""
     if not batch:
@@ -599,14 +618,16 @@ def translate_batch(batch, batch_id, progress, target_language):
         results[b['idx']] = translate_coordinate(b['content'])
     
     # Skip content that doesn't need translation (no API call)
+    # IMPORTANT: Keep original content as-is without re-escaping
     for b in skippable:
-        results[b['idx']] = b['content']
+        results[b['idx']] = b['content']  # Keep original escaped format
     
     # Only make API call if there's translatable content
     if translatable:
         with api_semaphore:
             time.sleep(config['api_delay'])
-            texts = [b['content'] for b in translatable]
+            # Use unescaped content for translation
+            texts = [b['original_unescaped'] for b in translatable]
             
             for attempt in range(config['max_retries'] + 1):
                 try:
@@ -628,9 +649,11 @@ def translate_batch(batch, batch_id, progress, target_language):
                             original = texts[i]
                             if ('buyingPanel/' in cleaned or 'infoPanel/' in cleaned) and not ('buyingPanel/' in original or 'infoPanel/' in original):
                                 print(f"⚠️  Detected contaminated translation, using original")
-                                results[translatable[i]['idx']] = original
+                                results[translatable[i]['idx']] = translatable[i]['content']
                             else:
-                                results[translatable[i]['idx']] = cleaned
+                                # Escape the translated content for PO format
+                                escaped_translation = escape_po(cleaned)
+                                results[translatable[i]['idx']] = escaped_translation
                         else:
                             results[translatable[i]['idx']] = translatable[i]['content']
                     
@@ -652,6 +675,8 @@ def translate_batch(batch, batch_id, progress, target_language):
         progress.update(len(batch))
     
     return results
+
+#checkpoint 5
 
 def process_file(src, dst, target_language):
     print(f"Processing {src}...")
@@ -691,7 +716,7 @@ def process_file(src, dst, target_language):
         # Copy lines before this msgstr block
         out.extend(lines[cur:b['start']])
         
-        # Get translation
+        # Get translation (already properly escaped if it was translated)
         trans = all_results.get(b['idx'], b['content'])
         indent = lines[b['start']].split('msgstr')[0]
         
@@ -724,17 +749,17 @@ def process_file(src, dst, target_language):
                                 # Last empty part from trailing \n
                                 continue
                             if j == len(parts) - 1:
-                                # Last part without \n
-                                out.append(f"{indent}\"{escape_po(part)}\"")
+                                # Last part without \n - content is already escaped
+                                out.append(f"{indent}\"{part}\"")
                             else:
-                                # Part with \n
-                                out.append(f"{indent}\"{escape_po(part)}\\n\"")
+                                # Part with \n - content is already escaped
+                                out.append(f"{indent}\"{part}\\n\"")
                     else:
                         # No \n sequences, treat as single line in multiline format
-                        out.append(f"{indent}\"{escape_po(form_content)}\"")
+                        out.append(f"{indent}\"{form_content}\"")
                 else:
-                    # Single line format
-                    out.append(f"{indent}msgstr[{form_num}] \"{escape_po(form_content)}\"")
+                    # Single line format - content is already escaped
+                    out.append(f"{indent}msgstr[{form_num}] \"{form_content}\"")
         else:
             # Handle regular singular msgstr (existing logic)
             if b['is_multiline'] or '\n' in trans.replace('\\n', ''):
@@ -749,17 +774,17 @@ def process_file(src, dst, target_language):
                             # Last empty part from trailing \n
                             continue
                         if j == len(parts) - 1:
-                            # Last part without \n
-                            out.append(f"{indent}\"{escape_po(part)}\"")
+                            # Last part without \n - content is already escaped
+                            out.append(f"{indent}\"{part}\"")
                         else:
-                            # Part with \n
-                            out.append(f"{indent}\"{escape_po(part)}\\n\"")
+                            # Part with \n - content is already escaped
+                            out.append(f"{indent}\"{part}\\n\"")
                 else:
                     # No \n sequences, treat as single line in multiline format
-                    out.append(f"{indent}\"{escape_po(trans)}\"")
+                    out.append(f"{indent}\"{trans}\"")
             else:
-                # Single line format
-                out.append(f"{indent}msgstr \"{escape_po(trans)}\"")
+                # Single line format - content is already escaped
+                out.append(f"{indent}msgstr \"{trans}\"")
         
         cur = b['end'] + 1
     
